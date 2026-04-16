@@ -62,6 +62,104 @@ Output (hidden states)
 
 > 각 연산의 상세는 subsection 1-2 ~ 1-6에서 다룬다.
 
+## FlashInfer on A100 — Full Decoder Block Pipeline
+
+SGLang + FlashInfer 스택에서 하나의 decoder block forward가 실행될 때,
+실제 Python-level 호출 경로는 다음과 같다.
+
+### 전체 흐름 (Pseudocode — SGLang model runner 기준)
+
+```python
+import torch
+import flashinfer
+
+# ── 서버 시작 시 1회: workspace 할당 + wrapper 생성 ──
+workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device="cuda")  # 128MB
+
+prefill_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(
+    workspace_buffer, kv_layout="NHD", backend="auto"  # A100: fa2 backend 선택됨
+)
+decode_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(
+    workspace_buffer, kv_layout="NHD", backend="auto"
+)
+
+# ── 매 forward step마다: 각 layer를 순회 ──
+for layer_idx in range(num_layers):
+    # [1] RMSNorm + Residual (fused CUDA kernel)
+    #     → flashinfer.rmsnorm() 또는 SGLang custom fused_add_rmsnorm
+    hidden = fused_add_rmsnorm(residual, hidden, weight=rmsnorm_weight)
+
+    # [2] QKV Projection (cuBLAS GEMM)
+    qkv = torch.mm(hidden, W_qkv)            # shape: [num_tokens, 3 * d_model]
+    q, k, v = qkv.split([d_q, d_k, d_v], dim=-1)
+
+    # [3] RoPE (elementwise CUDA kernel)
+    q, k = apply_rotary_pos_emb(q, k, positions)
+
+    # [4] KV Cache Append + Attention (FlashInfer)
+    #     → 아래 "Prefill path" 또는 "Decode path" 분기
+    if is_prefill:
+        kv_pool.set_kv_buffer(layer_idx, cache_loc, k, v)  # cache에 write
+        prefill_wrapper.plan(...)                            # plan: index 준비
+        attn_out = prefill_wrapper.run(                     # fused attention kernel
+            q.view(-1, num_q_heads, head_dim),
+            kv_pool.get_kv_buffer(layer_idx),               # (k_cache, v_cache) tuple
+            causal=True, sm_scale=1/sqrt(d_h),
+        )
+    else:  # decode
+        kv_pool.set_kv_buffer(layer_idx, cache_loc, k, v)
+        attn_out = decode_wrapper.run(                      # fused decode kernel
+            q.view(-1, num_q_heads, head_dim),
+            kv_pool.get_kv_buffer(layer_idx),
+            sm_scale=1/sqrt(d_h),
+        )
+
+    # [5] Output Projection (cuBLAS GEMM)
+    attn_out = torch.mm(attn_out.view(-1, d_model), W_o)
+
+    # [6] Residual + RMSNorm (fused)
+    hidden = fused_add_rmsnorm(residual, attn_out, weight=rmsnorm_weight_2)
+
+    # [7] FFN: Gate+Up Projection (cuBLAS GEMM)
+    gate_up = torch.mm(hidden, W_gate_up)     # [num_tokens, 2 * d_ff]
+
+    # [8] SiLU + Hadamard (elementwise CUDA kernel)
+    ffn_out = silu_and_mul(gate_up)           # [num_tokens, d_ff]
+
+    # [9] Down Projection (cuBLAS GEMM)
+    ffn_out = torch.mm(ffn_out, W_down)       # [num_tokens, d_model]
+
+    # residual은 다음 layer의 [1]에서 합산
+```
+
+### 커널 ↔ 라이브러리 매핑 (A100 기준)
+
+| # | 연산 | 실제 커널 | 라이브러리 | Bound |
+|---|------|----------|-----------|-------|
+| 1,6 | RMSNorm + Residual | `fused_add_rmsnorm` | FlashInfer / SGLang custom | Memory |
+| 2,5,7,9 | Linear Projection | `sm80_xmma_gemm_*` | cuBLAS (Ampere HMMA) | Compute (prefill) / Memory (decode) |
+| 3 | RoPE | `rotary_embedding_kernel` | SGLang custom | Memory |
+| 4 (prefill) | Attention | `flashinfer::fa2_*_paged_run` | FlashInfer FA2 (CUTLASS) | Compute |
+| 4 (decode) | Attention | `flashinfer::BatchDecodeWithPagedKVCache` | FlashInfer FA2 | Memory |
+| 8 | SiLU × Gate | `silu_and_mul_kernel` | SGLang custom | Memory |
+
+> **A100에서 FlashInfer backend="auto"는 `fa2` (Flash Attention v2, CUTLASS 기반)를 선택.**
+> H100 이상에서는 `fa3` 또는 `cudnn`이 선택될 수 있음.
+
+### 왜 plan() → run() 2-phase인가?
+
+```
+plan(): KV page table의 indptr/indices로부터 각 request의 attention 범위를 계산하고,
+        split-KV 전략 (긴 시퀀스를 여러 블록에 분산) 등의 scheduling을 결정.
+        → CPU-side 연산 + 소량의 GPU buffer write
+
+run():  실제 fused attention CUDA kernel을 launch.
+        plan() 결과를 참조하여 각 thread block이 어떤 Q/K/V 범위를 담당할지 결정됨.
+```
+
+이 2-phase 설계 덕분에 CUDA graph capture가 가능하고,
+같은 plan을 여러 layer에서 재사용할 수 있다 (layer간 KV page 구조가 동일하므로).
+
 ## Examples
 
 {{< hint info >}}
