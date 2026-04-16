@@ -54,7 +54,7 @@ Output (hidden states)
 
 | 연산 | 커널 유형 | 대표 라이브러리 |
 |------|-----------|-----------------|
-| QKV / Output / FFN projection | GEMM | cuBLAS, CUTLASS |
+| QKV / Output / FFN projection | GEMM | cuBLASLt (→ libcublasLt의 CUTLASS templates) |
 | Attention score + softmax + value aggregation | Fused Attention | FlashInfer, FlashAttention (Triton) |
 | LayerNorm | Reduction + Elementwise | Custom CUDA kernel |
 | Residual add | Elementwise | 보통 fused (LayerNorm과 합쳐짐) |
@@ -89,7 +89,7 @@ for layer_idx in range(num_layers):
     #     → flashinfer.rmsnorm() 또는 SGLang custom fused_add_rmsnorm
     hidden = fused_add_rmsnorm(residual, hidden, weight=rmsnorm_weight)
 
-    # [2] QKV Projection (cuBLAS GEMM)
+    # [2] QKV Projection (cuBLASLt GEMM via gemm_and_bias)
     qkv = torch.mm(hidden, W_qkv)            # shape: [num_tokens, 3 * d_model]
     q, k, v = qkv.split([d_q, d_k, d_v], dim=-1)
 
@@ -114,37 +114,43 @@ for layer_idx in range(num_layers):
             sm_scale=1/sqrt(d_h),
         )
 
-    # [5] Output Projection (cuBLAS GEMM)
+    # [5] Output Projection (cuBLASLt GEMM)
     attn_out = torch.mm(attn_out.view(-1, d_model), W_o)
 
     # [6] Residual + RMSNorm (fused)
     hidden = fused_add_rmsnorm(residual, attn_out, weight=rmsnorm_weight_2)
 
-    # [7] FFN: Gate+Up Projection (cuBLAS GEMM)
+    # [7] FFN: Gate+Up Projection (cuBLASLt GEMM)
     gate_up = torch.mm(hidden, W_gate_up)     # [num_tokens, 2 * d_ff]
 
     # [8] SiLU + Hadamard (elementwise CUDA kernel)
     ffn_out = silu_and_mul(gate_up)           # [num_tokens, d_ff]
 
-    # [9] Down Projection (cuBLAS GEMM)
+    # [9] Down Projection (cuBLASLt GEMM)
     ffn_out = torch.mm(ffn_out, W_down)       # [num_tokens, d_model]
 
     # residual은 다음 layer의 [1]에서 합산
 ```
 
-### 커널 ↔ 라이브러리 매핑 (A100 기준)
+### 커널 ↔ 라이브러리 매핑 (A100 기준 — SGLang 0.5.9 venv에서 검증)
 
-| # | 연산 | 실제 커널 | 라이브러리 | Bound |
-|---|------|----------|-----------|-------|
+| # | 연산 | 실제 커널 | 경로 | Bound |
+|---|------|----------|------|-------|
 | 1,6 | RMSNorm + Residual | `fused_add_rmsnorm` | FlashInfer / SGLang custom | Memory |
-| 2,5,7,9 | Linear Projection | `sm80_xmma_gemm_*` | cuBLAS (Ampere HMMA) | Compute (prefill) / Memory (decode) |
-| 3 | RoPE | `rotary_embedding_kernel` | SGLang custom | Memory |
+| 2,5,7,9 | Linear Projection | **`ampere_bf16_s16816gemm_*`** | **cuBLASLt** via PyTorch `gemm_and_bias` wrapper | Compute (prefill) / Memory (decode) |
+| 3 | RoPE | `rotary_embedding_kernel` | SGLang custom (vLLM kernels 경로) | Memory |
 | 4 (prefill) | Attention | `flashinfer::fa2_*_paged_run` | FlashInfer FA2 (CUTLASS) | Compute |
 | 4 (decode) | Attention | `flashinfer::BatchDecodeWithPagedKVCache` | FlashInfer FA2 | Memory |
 | 8 | SiLU × Gate | `silu_and_mul_kernel` | SGLang custom | Memory |
 
 > **A100에서 FlashInfer backend="auto"는 `fa2` (Flash Attention v2, CUTLASS 기반)를 선택.**
 > H100 이상에서는 `fa3` 또는 `cudnn`이 선택될 수 있음.
+
+> **Dense GEMM 실호출 경로는 cuBLAS가 아니라 cuBLASLt다.**
+> `F.linear` → `at::native::linear` → `at::matmul` → `at::mm` → `addmm_out_cuda_impl` →
+> `gemm_and_bias<BFloat16>` → `cublasLtMatmul` → libcublasLt.so의 precompiled CUTLASS template
+> (`ampere_bf16_s16816gemm_*` 또는 fallback `cutlass::Kernel2<cutlass_80_tensorop_*_align8>`).
+> 전체 file:line 경로는 **[1-8 Dense GEMM Call Path]({{< relref "1-8_DenseGEMMCallPath" >}})**.
 
 ### 왜 plan() → run() 2-phase인가?
 

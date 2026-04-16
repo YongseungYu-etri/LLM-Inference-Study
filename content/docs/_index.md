@@ -22,7 +22,7 @@ Transformer decoder-block 기반 LLM에서 최신 variants (Dense, MoE, MLA, Par
 ## Baseline Stack
 
 - **Serving platform**: SGLang
-- **GPU kernel backend**: FlashInfer 0.6.3 (cuBLAS, cuDNN, Triton-FA, CUTLASS)
+- **GPU kernel backend**: FlashInfer 0.6.3 (+ cuBLASLt for dense GEMM, cuDNN, Triton-FA, CUTLASS)
 - **Hardware**: NVIDIA A100 80GB PCIe x2 (no NVLink, cross-NUMA SYS connection)
 
 ## Methodology

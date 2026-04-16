@@ -17,15 +17,15 @@ Pre-LN Decoder Block 1개의 forward에서 실제로 launch되는 커널 시퀀�
 
 ```
 [1] fused_add_rmsnorm      ← residual(이전 layer) + RMSNorm
-[2] qkv_gemm               ← W_QKV projection (cuBLAS)
+[2] qkv_gemm               ← W_QKV projection (cuBLASLt)
 [3] rope_kernel             ← Rotary Position Embedding (elementwise)
 [4] kv_cache_append         ← K,V를 cache에 저장
 [5] flash_attention         ← FlashInfer fused attention kernel
-[6] output_proj_gemm        ← W_O projection (cuBLAS)
+[6] output_proj_gemm        ← W_O projection (cuBLASLt)
 [7] fused_add_rmsnorm      ← residual + RMSNorm
-[8] gate_up_gemm            ← W_gate_up projection (cuBLAS)
+[8] gate_up_gemm            ← W_gate_up projection (cuBLASLt)
 [9] silu_and_mul            ← SiLU activation + hadamard (elementwise)
-[10] down_proj_gemm         ← W_down projection (cuBLAS)
+[10] down_proj_gemm         ← W_down projection (cuBLASLt)
 ```
 
 > 위는 Llama-style (Pre-LN + SwiGLU + RoPE + GQA)의 예시.

@@ -49,13 +49,25 @@ FFN의 GEMM들은 **전체 decoder block FLOPs의 ~2/3**를 차지 (attention이
 
 ## GPU 커널 매핑
 
-### GEMM (Up/Gate/Down Projection)
+### GEMM (Up/Gate/Down Projection) — 실제 경로
 
 ```
-cuBLAS: cublasGemmEx() / cublasLtMatmul()
-  - Prefill: 큰 M (= S) → compute-bound, 높은 GPU utilization
-  - Decode: M=1 (single token) → GEMV에 가까움, memory-bound
+SGLang Linear forward
+  → UnquantizedLinearMethod.apply         (unquant.py:151)
+    → F.linear                              (torch._C._nn.linear binding)
+      → at::native::linear                  → at::matmul → at::mm
+        → addmm_out_cuda_impl               (β=0 wrapper)
+          → gemm_and_bias<BFloat16>         (ATen/cuda/CUDABlas.cpp)
+            → cublasLtMatmul                ★ libcublasLt.so.12
+              → ampere_bf16_s16816gemm_*    (precompiled CUTLASS template)
+                또는 cutlass::Kernel2<cutlass_80_tensorop_*_align8>  (fallback)
 ```
+
+**핵심**: cuBLAS (`cublasGemmEx`)가 **아니고** cuBLASLt (`cublasLtMatmul`) 경로.
+전체 call path file:line 매핑은 **[1-8 Dense GEMM Call Path]({{< relref "1-8_DenseGEMMCallPath" >}})** 참고.
+
+- **Prefill**: 큰 M (= S) → compute-bound, 높은 GPU utilization
+- **Decode**: M=1 (single token) → GEMV에 가까움, memory-bound
 
 ### Activation Fusion
 
@@ -67,10 +79,10 @@ SiLU + Hadamard product는 보통 별도 elementwise kernel로 launch
 
 ## FlashInfer on A100 — FFN 커널 경로
 
-### GEMM: cuBLAS 호출 경로
+### GEMM: cuBLASLt 호출 경로 (검증)
 
-SGLang에서 FFN projection은 PyTorch `torch.mm()` / `F.linear()`를 통해
-최종적으로 cuBLAS를 호출한다.
+SGLang에서 FFN projection은 PyTorch `F.linear()`를 통해
+**cuBLASLt** (`libcublasLt.so.12`)를 호출한다. 전체 file:line 매핑은 **1-8**에.
 
 ```python
 import torch
@@ -87,10 +99,10 @@ W_down    = torch.randn(d_ff, d_model, dtype=torch.bfloat16, device="cuda")
 # ── Prefill (S=512 tokens) ──
 hidden = torch.randn(512, d_model, dtype=torch.bfloat16, device="cuda")
 
-# [1] Gate+Up Projection — single cuBLAS GEMM
+# [1] Gate+Up Projection — cuBLASLt via gemm_and_bias
 gate_up = F.linear(hidden, W_gate_up.T)   # [512, 2*d_ff] = [512, 28672]
-# 내부: cublasLtMatmul(M=512, N=28672, K=4096)
-#   A100: Ampere HMMA (bf16 tensor core), tile 128x256x32 등
+# 내부: cublasLtMatmul(M=512, N=28672, K=4096) via PyTorch gemm_and_bias<BFloat16>
+#   A100 sm80: ampere_bf16_s16816gemm_bf16_*_f2f_stages_*_tn (HMMA m16n8k16)
 #   FLOPs: 2 * 512 * 4096 * 28672 = 120.3 GFLOPS → compute-bound
 
 # [2] SiLU + Hadamard — elementwise kernel
@@ -99,15 +111,16 @@ ffn_mid = F.silu(gate) * up                # [512, d_ff]
 # SGLang에서는 fused 'silu_and_mul' CUDA kernel 1회로 처리
 # → memory-bound (단순 read → silu → multiply → write)
 
-# [3] Down Projection — cuBLAS GEMM
+# [3] Down Projection — cuBLASLt
 output = F.linear(ffn_mid, W_down.T)       # [512, d_model]
 # cublasLtMatmul(M=512, N=4096, K=14336)
+# 같은 ampere_bf16_s16816gemm_* family, 다른 tile config 선택됨
 
 # ── Decode (B=1 token) ──
 hidden_1 = torch.randn(1, d_model, dtype=torch.bfloat16, device="cuda")
 gate_up_1 = F.linear(hidden_1, W_gate_up.T)   # [1, 28672]
 # cublasLtMatmul(M=1, N=28672, K=4096)
-#   → 사실상 GEMV, memory-bound
+#   → M=1 이므로 cuBLASLt가 GEMV-friendly algo 선택 (작은 tile, split-K 가능)
 #   → Weight 전체를 HBM에서 읽어야 함: 4096 * 28672 * 2B = 224 MB
 #   → A100 HBM 2039 GB/s 기준 이론 ~0.11ms
 ```
@@ -124,18 +137,23 @@ gate_up_1 = F.linear(hidden_1, W_gate_up.T)   # [1, 28672]
 > AI (Arithmetic Intensity) = FLOPs / Bytes. A100 ridge point ≈ 153.
 > Decode에서 batch size를 키우면 AI가 linear하게 증가 → B≥153이면 compute-bound 전환.
 
-### SGLang에서의 FFN 구현 경로
+### SGLang에서의 FFN 구현 경로 (검증)
 
 ```
 LlamaDecoderLayer.forward()
   → LlamaMLP.forward()
     → gate_up_proj = MergedColumnParallelLinear(W_gate, W_up)  # 하나의 GEMM
-      → [cuBLAS] cublasLtMatmul
+      → UnquantizedLinearMethod.apply  (sglang/.../quantization/unquant.py:151)
+        → F.linear → at::native::linear → at::matmul → at::mm
+          → addmm_out_cuda_impl → gemm_and_bias<BFloat16>
+            → [cuBLASLt] cublasLtMatmul → ampere_bf16_s16816gemm_*
     → silu_and_mul(gate_up_proj)
       → [CUDA] silu_and_mul_kernel  # SGLang custom elementwise
     → down_proj = RowParallelLinear(W_down)
-      → [cuBLAS] cublasLtMatmul
+      → 동일 cuBLASLt 경로
 ```
+
+> 상세 file:line 분석: **[1-8 Dense GEMM Call Path]({{< relref "1-8_DenseGEMMCallPath" >}})**
 
 ## Examples
 

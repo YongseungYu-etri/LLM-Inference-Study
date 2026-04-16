@@ -60,13 +60,13 @@ $$
 
 ## GPU 커널 매핑
 
-### QKV Projection & Output Projection → cuBLAS GEMM
+### QKV Projection & Output Projection → cuBLASLt GEMM
 
 ```
 cublasGemmEx() 또는 cublasLtMatmul()
   - A: activation [S, d_model], B: weight [d_model, d_model]
   - 보통 QKV를 하나로 fuse: W_QKV ∈ R^{d_model × 3*d_model} → single GEMM
-  - FlashInfer/SGLang에서는 cuBLAS 또는 CUTLASS GEMM 호출
+  - SGLang dense path는 cuBLASLt via gemm_and_bias (**1-8 참고**)
 ```
 
 ### Attention Core → FlashAttention / FlashInfer Fused Kernel

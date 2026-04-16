@@ -11,7 +11,7 @@ weight: 5
 
 ```
 [1]  layernorm             ← mean + var reduction + normalize + scale + shift
-[2]  qkv_gemm              ← cuBLAS, weight [d_m, 3*d_m]
+[2]  qkv_gemm              ← cuBLASLt, weight [d_m, 3*d_m]
 [3]  kv_cache_append
 [4]  flash_attention       ← n_kv = n_q
 [5]  output_proj_gemm

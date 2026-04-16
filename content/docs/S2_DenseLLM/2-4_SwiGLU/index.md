@@ -133,7 +133,7 @@ hidden = torch.randn(num_tokens, d_model, dtype=torch.bfloat16, device="cuda")
 W_gate_up = torch.randn(2 * d_ff, d_model, dtype=torch.bfloat16, device="cuda")
 W_down = torch.randn(d_model, d_ff, dtype=torch.bfloat16, device="cuda")
 
-# ── [1] Gate+Up fused GEMM (cuBLAS) ──
+# ── [1] Gate+Up fused GEMM (cuBLASLt) ──
 gate_up = F.linear(hidden, W_gate_up)   # [512, 2*14336 = 28672]
 # cuBLAS: cublasLtMatmul(M=512, N=28672, K=4096)
 #   A100 bf16 tensor core (HMMA), tile 128×256×32
@@ -147,7 +147,7 @@ ffn_mid = flashinfer.activation.silu_and_mul(gate_up)
 # 내부 CUDA kernel: flashinfer::silu_and_mul
 #   - Memory-bound: 3 × 512 × 14336 × 2B = 42 MB HBM
 
-# ── [3] Down projection (cuBLAS) ──
+# ── [3] Down projection (cuBLASLt) ──
 output = F.linear(ffn_mid, W_down)      # [512, 4096]
 # cublasLtMatmul(M=512, N=4096, K=14336)
 ```

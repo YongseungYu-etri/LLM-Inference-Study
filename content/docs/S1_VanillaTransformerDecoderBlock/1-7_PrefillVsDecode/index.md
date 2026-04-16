@@ -27,12 +27,12 @@ LLM inference는 두 가지 phase로 나뉘며,
 ### GEMM
 
 ```
-Prefill:  cublasGemmEx(M=S, N=d_m, K=d_m)   → compute-bound
-Decode:   cublasGemmEx(M=1, N=d_m, K=d_m)    → memory-bound (= GEMV)
+Prefill:  cublasLtMatmul(M=S, N=d_m, K=d_m)   → compute-bound
+Decode:   cublasLtMatmul(M=1, N=d_m, K=d_m)    → memory-bound (= GEMV)
           또는 batched: M=B (batch size)
 ```
 
-cuBLAS/CUTLASS는 M 크기에 따라 **다른 tile configuration**을 선택.
+cuBLASLt는 M 크기에 따라 **다른 tile configuration**을 heuristic으로 선택.
 - Large M: 큰 tile (128×256), 높은 compute throughput
 - Small M: 작은 tile, 또는 split-K strategy
 

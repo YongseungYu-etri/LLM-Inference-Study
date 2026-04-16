@@ -20,3 +20,4 @@ bookCollapseSection: false
 | 1-5 | [LayerNorm]({{< relref "1-5_LayerNorm" >}}) | Normalization 수식과 reduction 커널 |
 | 1-6 | [Residual & Data Flow]({{< relref "1-6_Residual_and_DataFlow" >}}) | Residual connection, 전체 forward의 커널 launch 순서 |
 | 1-7 | [Prefill vs Decode]({{< relref "1-7_PrefillVsDecode" >}}) | 같은 수식, 다른 커널 — compute-bound vs memory-bound |
+| 1-8 | [Dense GEMM Call Path]({{< relref "1-8_DenseGEMMCallPath" >}}) | SGLang→cuBLASLt 실호출 경로 검증 (file:line) |
