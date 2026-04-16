@@ -1,0 +1,32 @@
+baseURL = 'https://YongseungYu-etri.github.io/LLM-Inference-Study/'
+languageCode = 'en-us'
+title = 'LLM Inference Study'
+theme = 'hugo-book'
+
+# Hugo Book theme configuration
+[params]
+  BookToC = true
+  BookSection = 'docs'
+  BookRepo = 'https://github.com/YongseungYu-etri/LLM-Inference-Study'
+  BookEditPath = 'edit/main/content'
+  BookDateFormat = 'January 2, 2006'
+
+# KaTeX math rendering
+[params.katex]
+  enable = true
+
+# Syntax highlighting
+[markup]
+  [markup.highlight]
+    style = 'monokai'
+    lineNos = true
+    guessSyntax = true
+  [markup.goldmark]
+    [markup.goldmark.renderer]
+      unsafe = true
+    [markup.goldmark.extensions]
+      [markup.goldmark.extensions.passthrough]
+        enable = true
+        [markup.goldmark.extensions.passthrough.delimiters]
+          block = [['\[', '\]'], ['$$', '$$']]
+          inline = [['\(', '\)'], ['$', '$']]
