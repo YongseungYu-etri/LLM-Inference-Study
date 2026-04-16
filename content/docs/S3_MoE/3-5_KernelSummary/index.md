@@ -186,7 +186,7 @@ DeepSeek-V3 (S5)는 **둘 다** 적용 + parallel attention/MoE.
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/mixtral_kernel_profile.py` — nsys로 MoE 커널들 시각화
-TODO: `examples/mixtral_vs_llama_comparison.py` — 같은 prompt에서 비교
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/mixtral_kernel_profile.py` — nsys로 MoE 커널들 시각화
+> TODO: `examples/mixtral_vs_llama_comparison.py` — 같은 prompt에서 비교
+

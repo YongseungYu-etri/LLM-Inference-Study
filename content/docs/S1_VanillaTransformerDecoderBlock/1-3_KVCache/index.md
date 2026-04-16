@@ -169,6 +169,6 @@ Page 할당/해제는 RadixCache가 관리:
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/kv_cache_memory_calculator.py` — 모델별 KV cache 크기 계산
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/kv_cache_memory_calculator.py` — 모델별 KV cache 크기 계산
+

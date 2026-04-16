@@ -80,7 +80,7 @@ A100 80GB:
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/roofline_prefill_decode.py` — A100에서의 roofline 분석
-TODO: `examples/profile_prefill_vs_decode.sh` — nsys로 실측 비교
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/roofline_prefill_decode.py` — A100에서의 roofline 분석
+> TODO: `examples/profile_prefill_vs_decode.sh` — nsys로 실측 비교
+

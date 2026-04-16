@@ -212,7 +212,7 @@ $g=4 \sim 8$이 sweet spot으로 정착. $g > 16$부터 품질 저하 발생 (�
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/gqa_kv_cache_comparison.py` — MHA vs GQA KV cache 메모리 측정
-TODO: `examples/gqa_decode_bandwidth.py` — decode 시 HBM 사용량 비교
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/gqa_kv_cache_comparison.py` — MHA vs GQA KV cache 메모리 측정
+> TODO: `examples/gqa_decode_bandwidth.py` — decode 시 HBM 사용량 비교
+

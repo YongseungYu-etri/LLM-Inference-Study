@@ -139,6 +139,6 @@ LlamaDecoderLayer.forward()
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/ffn_flops_comparison.py` — Vanilla vs SwiGLU FLOPs 비교
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/ffn_flops_comparison.py` — Vanilla vs SwiGLU FLOPs 비교
+

@@ -59,6 +59,6 @@ Pre-LN Decoder Block 1개의 forward에서 실제로 launch되는 커널 시퀀�
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/kernel_timeline_diagram.py` — nsys trace를 시각화
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/kernel_timeline_diagram.py` — nsys trace를 시각화
+

@@ -199,7 +199,7 @@ SwiGLU가 실증적으로 가장 안정적.
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/swiglu_vs_gelu.py` — 수식 검증 + PPL 비교 (작은 모델)
-TODO: `examples/profile_silu_and_mul.py` — fused vs non-fused 성능
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/swiglu_vs_gelu.py` — 수식 검증 + PPL 비교 (작은 모델)
+> TODO: `examples/profile_silu_and_mul.py` — fused vs non-fused 성능
+

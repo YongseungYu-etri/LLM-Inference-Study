@@ -229,7 +229,7 @@ Inference 관점에서 가장 큰 wins:
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/v3_layer_forward.py` — V3 layer를 PyTorch mock으로 구현 (shape 확인)
-TODO: `examples/v3_kernel_profile.py` — V2-Lite의 실제 nsys profile (V3 proxy)
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/v3_layer_forward.py` — V3 layer를 PyTorch mock으로 구현 (shape 확인)
+> TODO: `examples/v3_kernel_profile.py` — V2-Lite의 실제 nsys profile (V3 proxy)
+

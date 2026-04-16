@@ -209,7 +209,7 @@ Llama-3, Llama-3.1의 긴 context (128K+) 대응:
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/rope_convention_check.py` — interleaved vs half-split 동치성 검증
-TODO: `examples/rope_extrapolation.py` — context 길이별 품질 곡선
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/rope_convention_check.py` — interleaved vs half-split 동치성 검증
+> TODO: `examples/rope_extrapolation.py` — context 길이별 품질 곡선
+

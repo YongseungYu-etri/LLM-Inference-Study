@@ -166,7 +166,7 @@ imbalance 영향이 크고 dispatching 비용이 올라감. **S4, S5**에서 다
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/moe_imbalance_benchmark.py` — imbalance 정도별 latency 곡선
-TODO: `examples/capacity_factor_simulation.py` — token drop 시 품질 영향
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/moe_imbalance_benchmark.py` — imbalance 정도별 latency 곡선
+> TODO: `examples/capacity_factor_simulation.py` — token drop 시 품질 영향
+

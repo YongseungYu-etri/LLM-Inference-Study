@@ -277,7 +277,7 @@ Decode (T=1, k=2):
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/grouped_gemm_benchmark.py` — CUTLASS grouped GEMM vs 개별 GEMM
-TODO: `examples/moe_permute_cost.py` — permute/unpermute overhead 측정
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/grouped_gemm_benchmark.py` — CUTLASS grouped GEMM vs 개별 GEMM
+> TODO: `examples/moe_permute_cost.py` — permute/unpermute overhead 측정
+

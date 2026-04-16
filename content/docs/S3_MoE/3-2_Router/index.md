@@ -192,7 +192,7 @@ FlashInfer 0.6.3에는 MoE 전용 router/dispatch API가 없음
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/router_profile.py` — Mixtral router latency 측정
-TODO: `examples/expert_distribution.py` — expert 선택 분포 시각화
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/router_profile.py` — Mixtral router latency 측정
+> TODO: `examples/expert_distribution.py` — expert 선택 분포 시각화
+

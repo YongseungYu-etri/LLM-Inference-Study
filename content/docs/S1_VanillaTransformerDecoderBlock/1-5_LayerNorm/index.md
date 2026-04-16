@@ -146,6 +146,6 @@ LlamaDecoderLayer.forward():
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/layernorm_vs_rmsnorm.py` — 수식 검증 및 성능 비교
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/layernorm_vs_rmsnorm.py` — 수식 검증 및 성능 비교
+

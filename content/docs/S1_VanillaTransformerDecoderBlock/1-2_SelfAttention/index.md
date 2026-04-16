@@ -215,7 +215,7 @@ SGLang model forward
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/attention_flops_calculator.py` — shape별 FLOPs 계산
-TODO: `examples/naive_vs_flash_attention.py` — memory/compute 비교
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/attention_flops_calculator.py` — shape별 FLOPs 계산
+> TODO: `examples/naive_vs_flash_attention.py` — memory/compute 비교
+

@@ -326,7 +326,7 @@ S5에서 이것들을 종합.
 
 ## Examples
 
-{{< hint info >}}
-TODO: `examples/mla_vs_gqa_cache.py` — 같은 설정에서 KV cache 크기 비교
-TODO: `examples/mla_decode_bench.py` — A100에서 MLA decode latency
-{{< /hint >}}
+> [!NOTE]
+> TODO: `examples/mla_vs_gqa_cache.py` — 같은 설정에서 KV cache 크기 비교
+> TODO: `examples/mla_decode_bench.py` — A100에서 MLA decode latency
+

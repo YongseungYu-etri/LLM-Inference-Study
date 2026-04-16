@@ -162,6 +162,6 @@ run():  실제 fused attention CUDA kernel을 launch.
 
 ## Examples
 
-{{< hint info >}}
-TODO: 간단한 PyTorch 참조 구현 — `examples/vanilla_decoder_block.py`
-{{< /hint >}}
+> [!NOTE]
+> TODO: 간단한 PyTorch 참조 구현 — `examples/vanilla_decoder_block.py`
+
