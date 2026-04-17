@@ -292,3 +292,191 @@ python -c "import torch; print(torch.backends.cuda.preferred_blas_library())"
 이 subsection은 S2-S5에서도 **모든 dense GEMM**에 동일하게 적용된다 (QKV/output/FFN/gate_up/down).
 MoE grouped GEMM은 다른 경로 (Triton fused_moe or CUTLASS grouped GEMM) — **S3-3에서 이미 정확히 다룸**.
 MLA attention은 FlashInfer MLA wrapper 경로 — **S4-5에서 이미 정확히 다룸**.
+
+---
+
+# Part 2: Decoder Block 전체 구조 — Before / Loop / After
+
+> **Verified**: 2026-04-17, 동일 환경 (SGLang 0.5.9 + FlashInfer 0.6.3, A100 SM80).
+> 출처: `tbd-project/results/CALL_STACK_F_LINEAR_TO_CUBLASLT.md` Part 2.
+
+## 전체 Forward Pass 구조
+
+```
+LlamaForCausalLM.forward                          (llama.py:574)
+ │
+ ├── [BEFORE LOOP] ─────────────── 1회
+ │    embed_tokens(input_ids)      ← embedding lookup (GEMM 아님, index_select)
+ │    residual = None
+ │
+ ├── [LOOP ×32] ────────────────── num_hidden_layers 반복
+ │    for i in range(start_layer, end_layer):
+ │        hidden_states, residual = layer(positions, hidden_states, forward_batch, residual)
+ │
+ └── [AFTER LOOP] ──────────────── 1회
+      norm(hidden_states, residual)  ← fused_add_rmsnorm (loop 내와 동일)
+      logits_processor(...)
+        └── torch.matmul(hidden, lm_head.weight.T)   ★ F.linear 아님, torch.matmul 직접
+            [B, 4096] @ [4096, 128256] → [B, 128256]
+```
+
+### lm_head는 SGLang Linear 경로를 안 탄다
+
+| 항목 | 값 |
+|------|-----|
+| 진입점 | `torch.matmul` 직접 호출 (logits_processor.py:881) |
+| SGLang `LinearBase` 계열? | **아님**. `ParallelLMHead(VocabParallelEmbedding)` |
+| PACT26 패치(`_USE_FLASHINFER_GEMM`) 적용? | **안 됨**. `UnquantizedLinearMethod.apply`를 경유 안 함 |
+| cuBLASLt 경로? | **예**. `torch.matmul` → `at::matmul` → `at::mm` → cuBLASLt (Stage 5부터 동일) |
+
+## Decoder Block 내부: LlamaDecoderLayer (×32)
+
+**File**: `llama.py:309-390` — **정확한 kernel 순서 (검증)**:
+
+```
+LlamaDecoderLayer.forward(positions, hidden_states, forward_batch, residual)
+ │
+ ├─[1] input_layernorm(hidden_states, residual)
+ │      layer 0: rmsnorm(x)  /  layer 1~31: fused_add_rmsnorm(x, residual)
+ │
+ ├─[2] self_attn
+ │   ├─[2a] qkv_proj(x)          GEMM #1 — [B,4096]@[4096,6144] → cuBLASLt
+ │   │      → split → q[B,4096], k[B,1024], v[B,1024]
+ │   │
+ │   ├─[2b] rotary_emb(pos, q, k) RoPE — FlashInfer BatchQKApplyRotaryPosIdsCosSinCacheKernel
+ │   │
+ │   ├─[2c] attn(q, k, v)         Attention — KV write + FlashInfer kernel (아래 상세)
+ │   │
+ │   └─[2d] o_proj(attn_out)      GEMM #2 — [B,4096]@[4096,4096] → cuBLASLt
+ │
+ ├─[3] post_attention_layernorm    fused_add_rmsnorm
+ │
+ └─[4] mlp
+     ├─[4a] gate_up_proj(x)       GEMM #3 — [B,4096]@[4096,28672] → cuBLASLt
+     ├─[4b] silu_and_mul           FlashInfer act_and_mul_kernel
+     └─[4c] down_proj(x)          GEMM #4 — [B,14336]@[14336,4096] → cuBLASLt
+```
+
+## KV Cache — Write와 Read의 비대칭성
+
+| 동작 | 별도 kernel? | 설명 |
+|------|:-----------:|------|
+| **Write** | **Yes** — `sgl_kernel.store_kvcache` | `set_kv_buffer()` → 새 token의 k,v를 layer별 buffer에 scatter write |
+| **Read** | **No** — attention kernel 내부 implicit | `get_kv_buffer(layer_id)` → tensor reference만 반환. 실제 HBM read는 attention kernel의 `cp_async` prefetch |
+
+```python
+# flashinfer_backend.py:882-895 (decode path)
+if save_kv_cache:
+    forward_batch.token_to_kv_pool.set_kv_buffer(    # ← [WRITE] 별도 kernel launch
+        layer, cache_loc, k, v, ...)
+o = decode_wrapper.forward(
+    q, forward_batch.token_to_kv_pool.get_kv_buffer(layer.layer_id),  # ← [READ] 포인터만
+    sm_scale=..., ...)
+```
+
+## FlashInfer Attention Kernel — "FA2"의 실체 (교정)
+
+### 핵심 교정: FlashInfer는 외부 라이브러리를 사용하지 않는다
+
+**기존 study에서의 오류**: "FlashInfer FA2 (CUTLASS)", "`flashinfer::fa2_*_paged_run`"
+
+**실제**: FlashInfer는 **자체 CUDA kernel을 JIT 컴파일**하여 사용. "FA2"는 Flash Attention 2의 **tile-based softmax recomputation 알고리즘**을 차용한 것이지, Tri Dao의 FA2 라이브러리/CUTLASS/Triton-FA/cuDNN을 호출하는 것이 아님.
+
+### Backend 선택 로직 (A100 SM80)
+
+```
+should_use_tensor_core(kv_dtype=bf16, n_q_heads, n_kv_heads):
+    gqa_group = n_q_heads / n_kv_heads
+    return (gqa_group >= 4)    # BF16 기준
+```
+
+| 모델 | Q heads | KV heads | GQA group | use_tensor_cores | Kernel |
+|------|---------|----------|:---------:|:----------------:|--------|
+| Llama-3-8B | 32 | 8 | 4 | **True** | `BatchPrefillWithPagedKVCacheKernel` |
+| Mistral-7B | 32 | 8 | 4 | **True** | `BatchPrefillWithPagedKVCacheKernel` |
+| Qwen2.5-7B | 28 | 4 | 7 | **True** | `BatchPrefillWithPagedKVCacheKernel` |
+| Qwen-MoE | 16 | 16 | 1 | **False** | `BatchDecodeWithPagedKVCacheKernel` |
+| DeepSeek-V2 | MLA | MLA | — | — | `BatchMLAPagedAttentionKernel` |
+
+### nsys에서 보이는 실제 kernel 이름
+
+| 조건 | Kernel | nsys 이름 |
+|------|--------|-----------|
+| GQA≥4 (tensor core) | FlashInfer JIT prefill | `BatchPrefillWithPagedKVCacheKernel<...>` |
+| GQA<4 (standard) | FlashInfer JIT decode | `BatchDecodeWithPagedKVCacheKernel<...>` |
+| MLA | FlashInfer JIT MLA | `BatchMLAPagedAttentionKernel<...>` |
+
+### JIT 컴파일 경로
+
+```
+FlashInfer wrapper.plan() or first run
+  → get_batch_prefill_module("fa2", ...)           (decode.py:1051)
+    → flashinfer.jit.attention.modules.gen_batch_prefill_module()
+      → Jinja2 template rendering
+        → CUDA source generation
+          → nvcc JIT compile → .so
+            → pybind11 module load
+```
+
+### Kernel 구현 위치
+
+```
+flashinfer/data/include/flashinfer/attention/
+  decode.cuh:613    BatchDecodeWithPagedKVCacheKernel (template)
+  prefill.cuh       BatchPrefillWithPagedKVCacheKernel (tensor core path)
+  variants.cuh:31   DefaultAttention struct (softmax variant)
+```
+
+자체 작성 CUDA `__global__` kernel. Shared memory pipelining (`cp_async`), split-K reduction, online softmax 등 구현.
+
+## 전체 Kernel Count (1 decode step, Llama-3-8B)
+
+```
+1회만 (loop 밖):
+  embed_tokens         ── embedding index_select              1회
+  final RMSNorm        ── sgl_kernel fused_add_rmsnorm        1회
+  lm_head              ── GEMM via cuBLASLt (torch.matmul)    1회
+
+32회 (× num_layers):
+  input_layernorm      ── sgl_kernel fused_add_rmsnorm       32회
+  qkv_proj             ── GEMM via cuBLASLt                  32회
+  rotary_emb           ── FlashInfer RoPE kernel             32회
+  KV cache write       ── sgl_kernel store_kvcache           32회
+  attention            ── FlashInfer BatchPrefill/Decode*    32회
+  o_proj               ── GEMM via cuBLASLt                  32회
+  post_attn_layernorm  ── sgl_kernel fused_add_rmsnorm       32회
+  gate_up_proj         ── GEMM via cuBLASLt                  32회
+  SiLU activation      ── FlashInfer act_and_mul_kernel      32회
+  down_proj            ── GEMM via cuBLASLt                  32회
+─────────────────────────────────────────────────────────────
+Total CUDA kernel launches:    ~323회/step
+
+내역:
+  GEMM:       4 × 32 + 1 (lm_head)  = 129회
+  RMSNorm:    2 × 32 + 1 (final)    =  65회
+  Attention:  1 × 32                 =  32회
+  RoPE:       1 × 32                 =  32회
+  KV write:   1 × 32                 =  32회
+  SiLU:       1 × 32                 =  32회
+  Embedding:                            1회
+```
+
+## Layer 간 데이터 흐름
+
+| 데이터 | 32개 layer 걸쳐 변화? | 상세 |
+|--------|:--------------------:|------|
+| `hidden_states` | **매 layer 갱신** | layer output → 다음 input. shape `[B, H]` 유지 |
+| `residual` | **매 layer 갱신** | fused_add_rmsnorm이 in-place 갱신 |
+| `positions` | **불변** | 동일한 position 벡터가 32개 layer RoPE에 전달 |
+| `forward_batch` | **불변** (구조체) | batch metadata (cache_loc, seq_lens 등) |
+| weight | **layer마다 고유** | `layers[i]` 각각 독립 weight set |
+| KV cache | **layer별 독립 축적** | `k_buffer[layer_id]` — 매 token마다 1행 append |
+
+## 교정 rule 추가 (Part 2 기반)
+
+| 기존 study 표현 | 정확한 표현 |
+|-----|-----|
+| "FlashInfer FA2 (CUTLASS)" | **"FlashInfer 자체 CUDA kernel (JIT compiled, FA2 algorithm style)"** |
+| `flashinfer::fa2_*_paged_run` | **`BatchPrefillWithPagedKVCacheKernel<...>` / `BatchDecodeWithPagedKVCacheKernel<...>`** |
+| "FlashInfer FA2" = FA2 library | **FlashInfer는 FA2/Triton-FA/cuDNN/CUTLASS 어느 것도 호출하지 않음. 자체 구현.** |
+| `append_paged_kv_cache` (FlashInfer API) | **SGLang에서는 `sgl_kernel.store_kvcache` 사용 (FlashInfer page API와 다른 경로)** |

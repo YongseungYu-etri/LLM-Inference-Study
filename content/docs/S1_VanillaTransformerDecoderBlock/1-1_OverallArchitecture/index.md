@@ -139,12 +139,15 @@ for layer_idx in range(num_layers):
 | 1,6 | RMSNorm + Residual | `fused_add_rmsnorm` | FlashInfer / SGLang custom | Memory |
 | 2,5,7,9 | Linear Projection | **`ampere_bf16_s16816gemm_*`** | **cuBLASLt** via PyTorch `gemm_and_bias` wrapper | Compute (prefill) / Memory (decode) |
 | 3 | RoPE | `rotary_embedding_kernel` | SGLang custom (vLLM kernels 경로) | Memory |
-| 4 (prefill) | Attention | `flashinfer::fa2_*_paged_run` | FlashInfer FA2 (CUTLASS) | Compute |
-| 4 (decode) | Attention | `flashinfer::BatchDecodeWithPagedKVCache` | FlashInfer FA2 | Memory |
-| 8 | SiLU × Gate | `silu_and_mul_kernel` | SGLang custom | Memory |
+| 4 (prefill) | Attention | **`BatchPrefillWithPagedKVCacheKernel<...>`** | **FlashInfer 자체 CUDA kernel** (JIT compiled) | Compute |
+| 4 (decode) | Attention | **`BatchPrefillWithPagedKVCacheKernel<...>`** (GQA≥4) 또는 `BatchDecodeWithPagedKVCacheKernel<...>` | **FlashInfer 자체 CUDA kernel** | Memory |
+| — | KV cache write | `sgl_kernel.store_kvcache` | SGLang custom kernel | Memory |
+| 8 | SiLU × Gate | `act_and_mul_kernel` | FlashInfer custom | Memory |
 
-> **A100에서 FlashInfer backend="auto"는 `fa2` (Flash Attention v2, CUTLASS 기반)를 선택.**
-> H100 이상에서는 `fa3` 또는 `cudnn`이 선택될 수 있음.
+> **FlashInfer는 FA2/Triton-FA/cuDNN/CUTLASS 어느 것도 호출하지 않는다.**
+> 자체 CUDA kernel을 JIT 컴파일하여 사용. "FA2"는 알고리즘 스타일 이름일 뿐,
+> Tri Dao의 Flash Attention 2 라이브러리가 아님. 상세는 **[1-8 Part 2]({{< relref "1-8_DenseGEMMCallPath" >}})**.
+> A100에서 GQA group≥4이면 BatchPrefillKernel(tensor core), <4이면 BatchDecodeKernel 사용.
 
 > **Dense GEMM 실호출 경로는 cuBLAS가 아니라 cuBLASLt다.**
 > `F.linear` → `at::native::linear` → `at::matmul` → `at::mm` → `addmm_out_cuda_impl` →
